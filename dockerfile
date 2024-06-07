@@ -8,7 +8,6 @@ RUN apt-get update && \
     bwa \
     samtools \
     python3 \
-    R \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
