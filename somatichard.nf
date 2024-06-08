@@ -2,16 +2,18 @@
     Usage:
     nextflow run <nextflow_script> --ref <ref_file> --fastq_dir <father_fastq_pattern> --output_dir <output_dir> --known_sites_dir <known_sites_file>
     Example:
-    nextflow run somatichard.nf --ref /home/docker/ref/hg38.fa --fastq_dir '/home/docker/fastq/*_{R1,R2}*' --output_dir /home/docker/output --known_sites_dir /home/docker/ref/Homo_sapiens_assembly38.dbsnp138.vcf --data_sources /home/docker/data_sources/funcotator_dataSources.v1.8.hg38.20230908s -resume
+    nextflow run somatichard.nf --ref /home/bharath/Lifecell/ref/hg38.fa --fastq_dir '/home/bharath/Lifecell/fastqnew/*_{R1,R2}*' --output_dir /home/bharath/Lifecell/output --known_sites_dir /home/bharath/Lifecell/ref/Homo_sapiens_assembly38.dbsnp138.vcf --data_sources /home/bharath/somatic/funcotator_dataSources.v1.8.hg38.20230908g -resume
 
-    docker run -it --rm     -v /home/bharath/Lifecell/ref:/home/pipeline/ref     -v /home/bharath/Lifecel/fastqnew:/home/pipeline/fastq     -v /home/bharath/Lifecell/output:/home/pipeline/output     wxs
+    Example:
+    docker run -it --rm \
+    -v /home/bharath/Lifecell/ref:/home/docker/ref \
+    -v /home/bharath/Lifecell/fastqnew:/home/docker/fastq \
+    -v /home/bharath/Lifecell/output:/home/docker/output \
+    -v /home/bharath/somatic:/home/docker/data_sources \
+    wxs1
     
+    nextflow run somatic.nf --ref /home/docker/ref/hg38.fa --fastq_dir '/home/docker/fastq/*_{R1,R2}*' --output_dir /home/docker/output --known_sites_dir /home/docker/ref/Homo_sapiens_assembly38.dbsnp138.vcf --data_sources /home/docker/data_sources/funcotator_dataSources.v1.8.hg38.20230908g
     
-   command for filter only the somatic variants
-   java -jar /home/bharath/mapping/fastqnew/VarScan.v2.4.6.jar somaticFilter father.paired_sorted_dedup_reads.sorted_dedup_bqsr_reads.varscan_variants.vcf --output-file somatic_variants_filtered.vcf
-
-
-
 */
 
 ref_flag = false
@@ -92,6 +94,60 @@ workflow {
         gatk MarkDuplicatesSpark -I ${sam} -O ${sam.baseName}_sorted_dedup_reads.bam
         """
     }
+    
+    process alignmentmetrics {
+        cpus 4
+        memory '15.5GB'
+        publishDir("${params.output_dir}", mode: 'copy')
+          
+          
+        input:
+        val ref
+        path bam
+        
+        
+        output:
+        
+        path "${bam.baseName}.alignment_summary_metrics.txt"
+        
+        
+        script:
+        
+        """
+          gatk CollectAlignmentSummaryMetrics -R ${params.ref} -I ${bam} -O ${bam.baseName}.alignment_summary_metrics.txt
+         
+
+        
+        """
+        
+        
+        }
+    
+    process insertmetrics {
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}",mode:'copy')
+    
+    input:
+    path bam
+    
+    output:
+    path "${bam.baseName}insert_size_metrics.txt"
+    path "${bam.baseName}insert_size_histogram.pdf"
+    
+    
+    
+    script:
+    """
+    gatk CollectInsertSizeMetrics \
+    -I ${bam} \
+    -O ${bam.baseName}insert_size_metrics.txt \
+    -H ${bam.baseName}insert_size_histogram.pdf \
+    --METRIC_ACCUMULATION_LEVEL LIBRARY
+
+    
+    """ 
+    }
 
     process baseRecalibrator {
         cpus 4
@@ -108,6 +164,26 @@ workflow {
         """
         gatk BaseRecalibrator -I ${bam} -R ${params.ref} --known-sites ${params.known_sites_dir} -O ${bam.baseName}.recal_data.table
         """
+    }
+    
+    process analyzecovariates{
+        cpus 4 
+        memory '15.5GB'
+        publishDir("${params.output_dir}", mode: 'copy')
+    
+    input:
+    path recal_table
+    
+    output:
+    
+    path "recalibration_plots.pdf"
+    
+    
+    script:
+    """
+    gatk AnalyzeCovariates -bqsr ${recal_table} -plots recalibration_plots.pdf
+  
+    """
     }
 
     process applyBQSR {
@@ -145,8 +221,32 @@ workflow {
          
         """
     }
+    
+    process variantevaluation{
+    
+        cpus 4
+        memory '15.5GB'
+        publishDir("${params.output_dir}", mode: 'copy')   
+    
+    input:
+    val ref
+    path vcf
+    
+    output:
+    path "variant_evaluation_metrics.txt"
+    
+    
+    script:
+    
+    """
+    gatk VariantEval -R ${params.ref} -O variant_evaluation_metrics.txt --eval ${vcf}
+
+    
+    """
+    }
+    
    
-   process snp {
+    process snp {
     cpus 4
     memory '15.5GB'
     publishDir("${params.output_dir}", mode: 'copy')
@@ -387,9 +487,12 @@ gatk Funcotator \
     fastq_ch = Channel.fromFilePairs(params.fastq_dir)
     mapped_reads = align(ref_ch, fastq_ch)
     marked_duplicates = markDuplicates(mapped_reads)
+    insertmetrics(marked_duplicates)
+    alignmentmetrics(ref_ch,marked_duplicates)
     recalibrated = baseRecalibrator(marked_duplicates)
     bqsred = applyBQSR(marked_duplicates, recalibrated)
     variants=mutect2caller(bqsred)
+    variantevaluation(ref_ch,variants)
     snp_variants=snp(ref_ch,variants)
     indels_variants=indels(ref_ch,variants)
     snpsfilter=filtersnp(ref_ch,snp_variants)
@@ -405,6 +508,5 @@ gatk Funcotator \
     
     
 }
-
 
 
