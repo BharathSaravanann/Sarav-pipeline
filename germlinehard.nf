@@ -1,18 +1,18 @@
 /*
     Usage:
-    nextflow run <nextflow_script> --ref <ref_file> --fastq_dir <father_fastq_pattern> --output_dir <output_dir> --known_sites_dir <known_sites_file> --data_sources <data_source_files>
+    nextflow run <nextflow_script> --ref <ref_file> --fastq_dir <father_fastq_pattern> --output_dir <output_dir> --known_sites_dir <known_sites_file>
     Example:
     nextflow run germlinehard.nf --ref /home/bharath/Lifecell/ref/hg38.fa --fastq_dir '/home/bharath/Lifecell/fastq/*_{R1,R2}*' --output_dir /home/bharath/Lifecell/output --known_sites_dir /home/bharath/Lifecell/ref/Homo_sapiens_assembly38.dbsnp138.vcf --data_sources /home/bharath/germline/funcotator_dataSources.v1.8.hg38.20230908g -resume
 
     Example:
     docker run -it --rm \
-    -v /path/to/ref:/home/docker/ref \
-    -v /path/to/fastq:/home/docker/fastq \
-    -v /path/to/output:/home/docker/output \
-    -v /path/to/data_source:/home/docker/data_sources \
-    <docker_image_name>
+    -v /home/bharath/Lifecell/ref:/home/docker/ref \
+    -v /home/bharath/Lifecell/fastqnew:/home/docker/fastq \
+    -v /home/bharath/Lifecell/output:/home/docker/output \
+    -v /home/bharath/somatic:/home/docker/data_sources \
+    wxs1
     
-    nextflow run <script.nf> --ref /home/docker/ref/hg38.fa --fastq_dir '/home/docker/fastq/*_{R1,R2}*' --output_dir /home/docker/output --known_sites_dir /home/docker/ref/Homo_sapiens_assembly38.dbsnp138.vcf --data_sources /home/docker/data_sources/funcotator_dataSources.v1.8.hg38.20230908g
+    nextflow run somatic.nf --ref /home/docker/ref/hg38.fa --fastq_dir '/home/docker/fastq/*_{R1,R2}*' --output_dir /home/docker/output --known_sites_dir /home/docker/ref/Homo_sapiens_assembly38.dbsnp138.vcf --data_sources /home/docker/data_sources/funcotator_dataSources.v1.8.hg38.20230908g
 
 */
 
@@ -42,7 +42,7 @@ if (params.ref && params.fastq_dir && params.output_dir && params.known_sites_di
 
 println """\
         =================================================
-        |              G E R M L I N E   VC               |
+        |              G E R M L I N E   VC             |
         =================================================
 
              genome reference : ${params.ref}
@@ -94,6 +94,60 @@ workflow {
         gatk MarkDuplicatesSpark -I ${sam} -O ${sam.baseName}_sorted_dedup_reads.bam
         """
     }
+    
+    process alignmentmetrics {
+        cpus 4
+        memory '15.5GB'
+        publishDir("${params.output_dir}", mode: 'copy')
+          
+          
+        input:
+        val ref
+        path bam
+        
+        
+        output:
+        
+        path "${bam.baseName}.alignment_summary_metrics.txt"
+        
+        
+        script:
+        
+        """
+          gatk CollectAlignmentSummaryMetrics -R ${params.ref} -I ${bam} -O ${bam.baseName}.alignment_summary_metrics.txt
+         
+
+        
+        """
+        
+        
+        }
+    
+    process insertmetrics {
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}",mode:'copy')
+    
+    input:
+    path bam
+    
+    output:
+    path "${bam.baseName}insert_size_metrics.txt"
+    path "${bam.baseName}insert_size_histogram.pdf"
+    
+    
+    
+    script:
+    """
+    gatk CollectInsertSizeMetrics \
+    -I ${bam} \
+    -O ${bam.baseName}insert_size_metrics.txt \
+    -H ${bam.baseName}insert_size_histogram.pdf \
+    --METRIC_ACCUMULATION_LEVEL LIBRARY
+
+    
+    """ 
+    }
 
     process baseRecalibrator {
         cpus 4
@@ -110,6 +164,27 @@ workflow {
         """
         gatk BaseRecalibrator -I ${bam} -R ${params.ref} --known-sites ${params.known_sites_dir} -O ${bam.baseName}.recal_data.table
         """
+    }
+    
+    
+    process analyzecovariates{
+        cpus 4 
+        memory '15.5GB'
+        publishDir("${params.output_dir}", mode: 'copy')
+    
+    input:
+    path recal_table
+    
+    output:
+    
+    path "recalibration_plots.pdf"
+    
+    
+    script:
+    """
+    gatk AnalyzeCovariates -bqsr ${recal_table} -plots recalibration_plots.pdf
+  
+    """
     }
 
     process applyBQSR {
@@ -146,56 +221,80 @@ workflow {
         gatk HaplotypeCaller -R ${params.ref} -I ${bam} -O ${bam.baseName}.haplotype_variants.vcf
         """
     }
+    
+    process variantevaluation{
+    
+        cpus 4
+        memory '15.5GB'
+        publishDir("${params.output_dir}", mode: 'copy')   
+    
+    input:
+    val ref
+    path vcf
+    
+    output:
+    path "variant_evaluation_metrics.txt"
+    
+    
+    script:
+    
+    """
+    gatk VariantEval -R ${params.ref} -O variant_evaluation_metrics.txt --eval ${vcf}
+
+    
+    """
+    }
+    
    
    process snp {
-       cpus 4
-       memory '15.5GB'
-       publishDir("${params.output_dir}", mode: 'copy')
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
     
-       input:
-       val ref
-       path vcf
+    input:
+    val ref
+    path vcf
     
-       output:
-       path "${vcf.baseName}_snp.vcf"
+    output:
+    path "${vcf.baseName}_snp.vcf"
     
-       script:
-       """
-       gatk SelectVariants -R ${params.ref} -V ${vcf} --select-type SNP -O ${vcf.baseName}_snp.vcf
-       """
-   }
+    script:
+    """
+    gatk SelectVariants -R ${params.ref} -V ${vcf} --select-type SNP -O ${vcf.baseName}_snp.vcf
+    """
+}
 
-   process indels {
-      cpus 4
-      memory '15.5GB'
-      publishDir("${params.output_dir}", mode: 'copy')
+process indels {
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
     
-      input:
-      val ref
-      path vcf
+    input:
+    val ref
+    path vcf
     
-      output:
-      path "${vcf.baseName}_indels.vcf"
+    output:
+    path "${vcf.baseName}_indels.vcf"
     
-      script:
-      """
-      gatk SelectVariants -R ${params.ref} -V ${vcf} --select-type INDEL -O ${vcf.baseName}_indels.vcf
-      """
-   }
+    script:
+    """
+    gatk SelectVariants -R ${params.ref} -V ${vcf} --select-type INDEL -O ${vcf.baseName}_indels.vcf
+    """
+}
 
-    process filtersnp {
-      cpus 4
-     memory '15.5GB'
-     publishDir("${params.output_dir}", mode: 'copy')
-     input:
-     val ref
-     path vcf
+process filtersnp {
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
+    input:
+    val ref
+    path vcf
     
-     output:
-     path "${vcf.baseName}_filtered_snps.vcf"
+    output:
+    path "${vcf.baseName}_filtered_snps.vcf"
     
-     script:
-     """
+    script:
+    """
     gatk VariantFiltration -R ${params.ref} -V ${vcf} -O ${vcf.baseName}_filtered_snps.vcf \
         -filter-name "QD_filter" -filter "QD < 2.0" \
         -filter-name "FS_filter" -filter "FS > 60.0" \
@@ -207,22 +306,22 @@ workflow {
         -genotype-filter-name "DP_filter" \
         -genotype-filter-expression "GQ < 10" \
         -genotype-filter-name "GQ_filter"
-     """
-  }
+    """
+}
 
-    process filterindels {
-     cpus 4
-     memory '15.5GB'
-     publishDir("${params.output_dir}", mode: 'copy')
-     input:
-     val ref
-     path vcf
+process filterindels {
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
+    input:
+    val ref
+    path vcf
     
-     output:
-     path "${vcf.baseName}_filtered_indels.vcf"
+    output:
+    path "${vcf.baseName}_filtered_indels.vcf"
     
-     script:
-     """
+    script:
+    """
     gatk VariantFiltration -R ${params.ref} -V ${vcf} -O ${vcf.baseName}_filtered_indels.vcf \
         -filter-name "QD_filter" -filter "QD < 2.0" \
         -filter-name "FS_filter" -filter "FS > 60.0" \
@@ -233,117 +332,118 @@ workflow {
         -genotype-filter-expression "GQ < 10" \
         -genotype-filter-name "GQ_filter"
     """
-   }
+}
 
-     process passsnps{
-      cpus 4
-      memory '15.5GB'
-      publishDir("${params.output_dir}", mode: 'copy')
-
-      input:
-      path vcf
-
-
-      output:
-      path "${vcf.baseName}analysis-ready-snps.vcf"
-
-      script:
-
-      """
-        gatk SelectVariants \
-	--exclude-filtered \
-	-V ${vcf} \
-	-O ${vcf.baseName}analysis-ready-snps.vcf
-
-      """
-
-    }
-
-     process passindels{
-     cpus 4
-     memory '15.5GB'
-     publishDir("${params.output_dir}", mode: 'copy')
-
-     input:
-     path vcf
-
-
-     output:
-     path "${vcf.baseName}analysis-ready-indels.vcf"
-
-     script:
-
-     """
-     gatk SelectVariants \
-	--exclude-filtered \
-	-V ${vcf} \
-	-O ${vcf.baseName}analysis-ready-indels.vcf
-     """
-
-    }
-
-    process failedgenotypesnp {
-     cpus 4
-     memory '15.5GB'
-     publishDir("${params.output_dir}", mode: 'copy')
-
-     input:
-     path vcf
-
-
-
-     output:
-     path "${vcf.baseName}analysis-ready-snps-filteredGT.vcf"
-
-     script:
-
-     """
-     cat ${vcf}|grep -v -E "DP_filter|GQ_filter" > ${vcf.baseName}analysis-ready-snps-filteredGT.vcf
-
-     """
-
-    }
-
-   process failedgenotypeindels {
+process passsnps{
     cpus 4
     memory '15.5GB'
     publishDir("${params.output_dir}", mode: 'copy')
 
-    input:
-    path vcf
+input:
+path vcf
+
+
+output:
+path "${vcf.baseName}analysis-ready-snps.vcf"
+
+script:
+
+"""
+gatk SelectVariants \
+	--exclude-filtered \
+	-V ${vcf} \
+	-O ${vcf.baseName}analysis-ready-snps.vcf
+
+"""
+
+}
+
+process passindels{
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
+
+input:
+path vcf
+
+
+output:
+path "${vcf.baseName}analysis-ready-indels.vcf"
+
+script:
+
+"""
+gatk SelectVariants \
+	--exclude-filtered \
+	-V ${vcf} \
+	-O ${vcf.baseName}analysis-ready-indels.vcf
+
+"""
+
+}
+
+process failedgenotypesnp {
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
+
+input:
+path vcf
 
 
 
-    output:
-    path "${vcf.baseName}analysis-ready-indels-filteredGT.vcf"
+output:
+path "${vcf.baseName}analysis-ready-snps-filteredGT.vcf"
 
-    script:
+script:
 
-    """
-    cat ${vcf}|grep -v -E "DP_filter|GQ_filter" > ${vcf.baseName}analysis-ready-indels-filteredGT.vcf
+"""
+cat ${vcf}|grep -v -E "DP_filter|GQ_filter" > ${vcf.baseName}analysis-ready-snps-filteredGT.vcf
 
-    """
+"""
 
-   }
+}
 
-    process snpannotation{
-     cpus 4
-     memory '15.5GB'
-     publishDir("${params.output_dir}", mode: 'copy')
+process failedgenotypeindels {
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
 
-
-     input:
-     val ref
-     path vcf
-
-     output:
-     path "${vcf.baseName}analysis-ready-snps-filteredGT-functotated.vcf"
+input:
+path vcf
 
 
-     script:
 
-     """
-     gatk Funcotator \
+output:
+path "${vcf.baseName}analysis-ready-indels-filteredGT.vcf"
+
+script:
+
+"""
+cat ${vcf}|grep -v -E "DP_filter|GQ_filter" > ${vcf.baseName}analysis-ready-indels-filteredGT.vcf
+
+"""
+
+}
+
+process snpannotation{
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
+
+
+input:
+val ref
+path vcf
+
+output:
+path "${vcf.baseName}analysis-ready-snps-filteredGT-functotated.vcf"
+
+
+script:
+
+"""
+gatk Funcotator \
 	--variant ${vcf} \
 	--reference ${ref} \
 	--ref-version hg38 \
@@ -351,28 +451,28 @@ workflow {
 	--output ${vcf.baseName}analysis-ready-snps-filteredGT-functotated.vcf \
 	--output-file-format VCF
 
-     """
+"""
 
-   }
+}
 
-    process indelsannotation{
-     cpus 4
-     memory '15.5GB'
-     publishDir("${params.output_dir}", mode: 'copy')
-
-
-     input:
-     val ref
-     path vcf
-
-     output:
-     path "${vcf.baseName}analysis-ready-indels-filteredGT-functotated.vcf"
+process indelsannotation{
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
 
 
-     script:
+input:
+val ref
+path vcf
 
-     """
-     gatk Funcotator \
+output:
+path "${vcf.baseName}analysis-ready-indels-filteredGT-functotated.vcf"
+
+
+script:
+
+"""
+gatk Funcotator \
 	--variant ${vcf} \
 	--reference ${ref} \
 	--ref-version hg38 \
@@ -380,50 +480,36 @@ workflow {
 	--output ${vcf.baseName}analysis-ready-indels-filteredGT-functotated.vcf \
 	--output-file-format VCF
 
-     """
+"""
 
- }
+}
 
 
 
     ref_ch = Channel.of(params.ref)
-    
     fastq_ch = Channel.fromFilePairs(params.fastq_dir)
-    
     mapped_reads = align(ref_ch, fastq_ch)
-    
     marked_duplicates = markDuplicates(mapped_reads)
-    
+    insertmetrics(marked_duplicates)
+    alignmentmetrics(ref_ch,marked_duplicates)
     recalibrated = baseRecalibrator(marked_duplicates)
-    
     bqsred = applyBQSR(marked_duplicates, recalibrated)
-    
     variants=haplotypeCaller(bqsred)
-    
+    variantevaluation(ref_ch,variants)
     snp_variants=snp(ref_ch,variants)
-    
     indels_variants=indels(ref_ch,variants)
-    
     snpsfilter=filtersnp(ref_ch,snp_variants)
-    
     indelsfilter=filterindels(ref_ch,indels_variants)
-    
     snpfail=passsnps(snpsfilter)
-    
     indelsfail=passindels(indelsfilter)
-    
     finalsnp=failedgenotypesnp(snpfail)
-    
     finalindels=failedgenotypeindels(indelsfail)
-    
     snpannotation(ref_ch,finalsnp)
-    
     indelsannotation(ref_ch,finalindels)
     
     
     
     
 }
-
 
 
