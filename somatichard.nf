@@ -78,20 +78,71 @@ workflow {
         """
     }
 
+    process sortbam {
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
+    
+    input:
+    path sam
+    
+    output:
+    path "${sam.baseName}.sorted.bam"
+    
+    script:
+    """
+    gatk SortSam -I ${sam} -O ${sam.baseName}.sorted.bam --SORT_ORDER coordinate
+    """
+    
+   
+    }
+    
+    process indexbam {
+    cpus 4
+    memory '15.5GB'
+    publishDir("${params.output_dir}", mode: 'copy')
+    
+    
+    input:
+    path bam
+    
+    
+    output:
+    path "*"
+    
+    script:
+    
+    """
+    
+    gatk BuildBamIndex -I ${bam}
+    
+    """
+    
+    
+    }
+    
+    
+    
+
     process markDuplicates {
         cpus 4
         memory '15.5GB'
         publishDir("${params.output_dir}", mode: 'copy')
 
         input:
-        path sam
+        path bam
 
         output:
-        path "${sam.baseName}_sorted_dedup_reads.bam"
+        path "${bam.baseName}sorted_dedup_reads.bam"
 
         script:
         """
-        gatk MarkDuplicatesSpark -I ${sam} -O ${sam.baseName}_sorted_dedup_reads.bam
+        
+        
+        gatk MarkDuplicatesSpark \
+            -I ${bam} \
+            -O ${bam.baseName}sorted_dedup_reads.bam
+            
         """
     }
     
@@ -486,7 +537,9 @@ gatk Funcotator \
     ref_ch = Channel.of(params.ref)
     fastq_ch = Channel.fromFilePairs(params.fastq_dir)
     mapped_reads = align(ref_ch, fastq_ch)
-    marked_duplicates = markDuplicates(mapped_reads)
+    sorted=sortbam(mapped_reads)
+    marked_duplicates = markDuplicates(sorted)
+    indexbam(sorted)
     insertmetrics(marked_duplicates)
     alignmentmetrics(ref_ch,marked_duplicates)
     recalibrated = baseRecalibrator(marked_duplicates)
