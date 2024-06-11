@@ -22,11 +22,6 @@ ENV PATH="/usr/local/bin/gatk-4.5.0.0:${PATH}"
 RUN wget -qO- https://get.nextflow.io | bash -s -- -v 23.10.1 && \
     mv nextflow /usr/local/bin/
 
-WORKDIR /usr/local/bin
-RUN wget https://github.com/dkoboldt/varscan/releases/download/v2.4.6/VarScan.v2.4.6.jar && \
-    echo '#!/bin/bash\njava -jar /usr/local/bin/VarScan.v2.4.6.jar "$@"' > /usr/local/bin/varscan && \
-    chmod +x /usr/local/bin/varscan
-
 COPY germlinehard.nf /
 COPY somatichard.nf /
 
